@@ -1,0 +1,23 @@
+{
+  "name": "gitlab-gitea-migration",
+  "version": "1.0.0",
+  "description": "Migrate GitLab repositories to Gitea",
+  "main": "./lib/index.js",
+  "bin": {
+    "gitlab-gitea-migration": "./lib/index.js"
+  },
+  "author": "Maarten de Boer <maarten@cloudstek.nl>",
+  "license": "MIT",
+  "private": false,
+  "dependencies": {
+    "axios": "^0.18.0",
+    "chalk": "^2.4.2",
+    "commander": "^2.20.0",
+    "inquirer": "^6.2.2"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^6.0.0",
+    "@types/node": "^11.13.4",
+    "typescript": "^3.4.3"
+  }
+}
