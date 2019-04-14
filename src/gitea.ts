@@ -1,6 +1,7 @@
-import axios, { AxiosInstance } from 'axios';
-import url from 'url';
+import axios, { AxiosInstance, AxiosPromise, AxiosResponse, AxiosError } from 'axios';
+import { GitLabProject } from './gitlab';
 import chalk from 'chalk';
+import cliProgress from 'cli-progress';
 
 export interface GiteaOptions {
     /** Gitea instance url without trailing slash */
@@ -26,15 +27,11 @@ export interface GiteaMigrateOptions {
     private?: boolean;
 }
 
-export interface GiteaUserInfo {
-    id: number;
-    email: string;
-    name?: string;
-}
-
-export interface GiteaOrgInfo {
+export interface GiteaOwnerInfo {
     id: number;
     name: string;
+    username: string,
+    email?: string;
 }
 
 /**
@@ -57,55 +54,189 @@ export class Gitea {
         });
     }
 
-    async migrate(options: GiteaMigrateOptions) {
+    /**
+     * Migrate GitLab projects
+     *
+     * @param  projects    List of projects
+     * @param  owner       Gitea repository owner
+     * @param  progressBar Progress bar
+     */
+    async migrate(projects: GitLabProject[], owner: GiteaOwnerInfo, progressBar?: cliProgress.Bar) {
+        let migrations = [];
+        let errors: string[] = [];
+
+        if (progressBar) {
+            progressBar.start(projects.length, 0);
+        }
+
+        for (let project of projects) {
+            let repoName = this.repoName(project);
+
+            migrations.push(
+                this.http
+                    .post('/repos/migrate', {
+                        auth_username: this.gitlabUsername,
+                        auth_password: this.gitlabToken,
+                        clone_addr: project.httpUrl,
+                        description: project.description,
+                        mirror: true,
+                        private: project.visibility !== 'public',
+                        repo_name: repoName,
+                        uid: owner.id
+                    })
+                    .then(async () => {
+                        // // Migrate releases
+                        // let releaseErrors = await this.migrateReleases(project, owner);
+                        //
+                        // for (let error of releaseErrors.errors) {
+                        //     errors.push(error.message);
+                        // }
+                    })
+                    .catch(async (response) => {
+                        if (response.response.status !== 409) {
+                            let errorMessage = response.response.data.message || '';
+
+                            errors.push(
+                                chalk.redBright(`Failed to migrate ${owner.username}/${repoName} from ${project.httpUrl}:`) +
+                                `\n  Error ${response.response.status} ${response.response.statusText} ${errorMessage}`
+                            );
+
+                            return;
+                        }
+
+                        // if (response.response.status === 409) {
+                        //     // Migrate releases
+                        //     let releaseErrors = await this.migrateReleases(project, owner);
+                        //
+                        //     for (let error of releaseErrors.errors) {
+                        //         errors.push(error.message);
+                        //     }
+                        // }
+                    })
+                    .finally(async () => {
+                        if (progressBar) {
+                            progressBar.increment(1);
+                        }
+                    })
+            );
+        }
+
+        await Promise.all(migrations);
+
+        if (progressBar) {
+            progressBar.stop();
+            console.log();
+        }
+
+        for (let error of errors) {
+            console.error(error);
+        }
+    }
+
+    /**
+     * Migrate project releases
+     */
+    async migrateReleases(project: GitLabProject, owner: GiteaOwnerInfo): Promise<{ errors: Error[] }> {
         try {
-            await this.http.post('/repos/migrate', {
-                // TODO: Add post data for migration
+            const response = await this.http.get(`/projects/${project.id}/releases`);
+
+            let releases = [];
+            let errors: Error[] = [];
+
+            console.log(response.data);
+
+            // for (let release of response.data) {
+            //     releases.push(
+            //         this.http
+            //             .post(`/repos/${owner.username}/${this.repoName(project)}/releases`, {
+            //
+            //             })
+            //             .catch(() => {
+            //                 // return response;
+            //             })
+            //     )
+            //
+            // }
+            //
+            // await Promise.all(releases);
+
+            return { errors: errors };
+        } catch (ex) {
+            return {
+                errors: [
+                    new Error('Could not fetch list of releases from GitLab instance. ' + ex.message)
+                ]
+            }
+        }
+    }
+
+    /**
+     * List possible repository owners
+     */
+    async listOwners(): Promise<GiteaOwnerInfo[]> {
+        try {
+            const user = this.userInfo();
+            const orgs = this.listOrgs();
+
+            return Promise.all([user, orgs]).then(([user, orgs]) => {
+                let owners = [user];
+
+                return owners.concat(orgs);
             });
         } catch (ex) {
-            console.error(chalk.redBright('Could not fetch current user info from Gitea instance. ' + ex.message));
-            process.exit(1);
+            throw new Error('Could not fetch list of owners from Gitea instance. ' + ex.message);
         }
     }
 
     /**
      * Get current user info
      */
-    async userInfo(): Promise<GiteaUserInfo | undefined> {
+    async userInfo(): Promise<GiteaOwnerInfo> {
         try {
             const response = await this.http.get('/user');
 
             return {
                 id: response.data.id,
                 email: response.data.email,
-                name: response.data.full_name
+                name: response.data.full_name || response.data.username,
+                username: response.data.username
             };
         } catch (ex) {
-            console.error(chalk.redBright('Could not fetch current user info from Gitea instance. ' + ex.message));
-            process.exit(1);
+            throw new Error('Could not fetch current user info from Gitea instance. ' + ex.message);
         }
     }
 
     /**
      * List user organisations
      */
-    async listOrgs(): Promise<GiteaOrgInfo[] | undefined> {
+    async listOrgs(): Promise<GiteaOwnerInfo[]> {
         try {
             const response = await this.http.get('/user/orgs');
 
-            let orgs: GiteaOrgInfo[] = [];
+            let orgs: GiteaOwnerInfo[] = [];
 
             for (let org of response.data) {
                 orgs.push({
                     id: org.id,
-                    name: org.username
+                    name: org.username,
+                    username: org.username
                 });
             }
 
             return orgs;
         } catch (ex) {
-            console.error(chalk.redBright('Could not fetch user organisations from Gitea instance. ' + ex.message));
-            process.exit(1);
+            throw new Error('Could not fetch user organisations from Gitea instance. ' + ex.message);
         }
+    }
+
+    /**
+     * Convert GitLab project name to Gitea project name
+     *
+     * @param  project
+     *
+     * @return Project name
+     */
+    repoName(project: GitLabProject): string {
+        return project.fullPath.substr(project.fullPath.indexOf('/') + 1).replace('/', '-');
     }
 }

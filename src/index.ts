@@ -3,6 +3,7 @@
 import chalk from 'chalk';
 import program from 'commander';
 import inquirer, { Answers } from 'inquirer';
+import cliProgress from 'cli-progress';
 
 import { Gitea } from './gitea';
 import { GitLab, GitLabProject } from './gitlab';
@@ -63,37 +64,24 @@ import { GitLab, GitLabProject } from './gitlab';
     });
 
     // List projects and prompt which to export
-    let labProjects = await lab.listProjects();
+    let projects = await lab.listProjects();
 
-    if (labProjects === undefined || labProjects.length === 0) {
+    if (projects === undefined || projects.length === 0) {
         console.log('No projects found to migrate.');
         return;
     }
 
-    labProjects.sort((a, b) => {
-        let aParts = a.fullName.split(' / ');
-        let bParts = b.fullName.split(' / ');
-
-        for (let i in aParts) {
-            if ((bParts.length - 1) <  Number.parseInt(i)) {
-                return 1;
-            }
-
-            if (aParts[i] !== bParts[i]) {
-                return aParts[i].localeCompare(bParts[i]);
-            }
-        }
-
-        return 0;
-    });
+    // List possible owners
+    let owners = await tea.listOwners();
 
     prompt = await inquirer.prompt([
         {
             type: 'checkbox',
-            name: 'labProjects',
+            name: 'projects',
             message: 'Please select the GitLab projects to migrate:',
+            pageSize: 15,
             choices: () => {
-                return labProjects.map(project => {
+                return projects.map(project => {
                     return {
                         name: project.fullName,
                         value: project
@@ -105,16 +93,41 @@ import { GitLab, GitLabProject } from './gitlab';
             }
         },
         {
+            type: 'list',
+            name: 'owner',
+            message: 'Please select the owner of the migrated repository:',
+            pageSize: 10,
+            choices: () => {
+                return owners.map(owner => {
+                    return {
+                        name: owner.name,
+                        value: owner
+                    }
+                });
+            },
+            validate: (value) => {
+                return value.length > 0;
+            }
+        },
+        {
             type: 'confirm',
             name: 'continue',
             message: (answers: Answers) => {
-                let numProjects = answers.labProjects.length;
+                let numProjects = answers.projects.length;
 
                 return `Are you sure you want to migrate ${numProjects} project(s)?`;
             }
         }
     ]);
 
+    if (prompt.continue === false) {
+        return;
+    }
+
     // Change list of projects to selected list
-    labProjects = prompt.labProjects;
+    projects = prompt.projects;
+
+    // Migrate projects
+    console.log();
+    tea.migrate(projects, prompt.owner, new cliProgress.Bar({}, cliProgress.Presets.shades_classic));
 })();
