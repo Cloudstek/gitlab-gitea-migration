@@ -4,9 +4,11 @@ import chalk from 'chalk';
 import program from 'commander';
 import inquirer, { Answers } from 'inquirer';
 import cliProgress from 'cli-progress';
+import ora from 'ora';
 
 import { Gitea } from './gitea';
 import { GitLab, GitLabProject } from './gitlab';
+import { Migration } from './migration';
 
 (async function() {
     program
@@ -49,24 +51,45 @@ import { GitLab, GitLabProject } from './gitlab';
     program.labToken = program.labToken || prompt.labToken;
     program.teaToken = program.teaToken || prompt.teaToken;
 
+    // Progress bar
+    let progressBar = new cliProgress.Bar({}, cliProgress.Presets.shades_classic);
+
+    // Spinner
+    const spinner = ora('Loading projects').start();
+
     // Create GitLab API instance
     const lab = new GitLab({
         url: program.args[0],
-        token: program.labToken
+        token: program.labToken,
+        username: program.labUser
     });
 
     // Create Gitea API instance
     const tea = new Gitea({
         url: program.args[1],
-        token: program.teaToken,
-        gitlabUsername: program.labUser,
-        gitlabToken: program.labToken
+        token: program.teaToken
+    });
+
+    // Migration instance
+    const migration = new Migration(lab, tea, {
+        progressBar: progressBar
     });
 
     // List projects and prompt which to export
-    let projects = await lab.listProjects();
+    let projects: GitLabProject[] = [];
 
-    if (projects === undefined || projects.length === 0) {
+    try {
+        projects = await lab.listProjects();
+    } catch (ex) {
+        spinner.stop();
+        console.error(ex);
+        process.exit(1);
+        return;
+    }
+
+    spinner.stop();
+
+    if (projects.length === 0) {
         console.log('No projects found to migrate.');
         return;
     }
@@ -111,6 +134,11 @@ import { GitLab, GitLabProject } from './gitlab';
         },
         {
             type: 'confirm',
+            name: 'migrateKeys',
+            message: 'Would you also like to migrate deployment keys?'
+        },
+        {
+            type: 'confirm',
             name: 'continue',
             message: (answers: Answers) => {
                 let numProjects = answers.projects.length;
@@ -124,10 +152,37 @@ import { GitLab, GitLabProject } from './gitlab';
         return;
     }
 
+    // Output blank line
+    console.log();
+
     // Change list of projects to selected list
     projects = prompt.projects;
 
     // Migrate projects
+    console.log('Migrating projects...');
+    let projectMigrationResult = await migration.migrateProjects(projects, prompt.owner);
+
+    for (let error of projectMigrationResult.errors) {
+        console.error(error);
+    }
+
+    // Migrate deployment keys
+    if (prompt.migrateKeys) {
+        console.log('Migrating keys...');
+        let keyMigrationResult = await migration.migrateKeys(projects, prompt.owner);
+
+        for (let error of keyMigrationResult.errors) {
+            console.error(error);
+        }
+    }
+
+    // Make sure progress bar is stopped.
+    progressBar.stop();
+
     console.log();
-    tea.migrate(projects, prompt.owner, new cliProgress.Bar({}, cliProgress.Presets.shades_classic));
+    console.log(`All done!`);
+    console.log();
+    console.log(`Migrated: ${projectMigrationResult.success.length}`)
+    console.log(`Skipped: ${projectMigrationResult.skipped.length}`)
+    console.log(`Failed: ${projectMigrationResult.failed.length}`)
 })();

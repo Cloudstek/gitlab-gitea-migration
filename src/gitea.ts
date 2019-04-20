@@ -1,30 +1,10 @@
-import axios, { AxiosInstance, AxiosPromise, AxiosResponse, AxiosError } from 'axios';
-import { GitLabProject } from './gitlab';
-import chalk from 'chalk';
-import cliProgress from 'cli-progress';
+import axios, { AxiosInstance } from 'axios';
 
 export interface GiteaOptions {
     /** Gitea instance url without trailing slash */
     url: string;
     /** Gitea API token */
     token: string;
-    /** Gitlab username or email */
-    gitlabUsername: string;
-    /** Gitlab password or API token */
-    gitlabToken: string;
-}
-
-export interface GiteaMigrateOptions {
-    /** HTTP clone url */
-    url: string;
-    /** Repository name */
-    name: string;
-    /** Owning organisation/user ID */
-    owner?: number;
-    /** Repository description */
-    description?: string;
-    mirror?: boolean;
-    private?: boolean;
 }
 
 export interface GiteaOwnerInfo {
@@ -38,136 +18,15 @@ export interface GiteaOwnerInfo {
  * Gitea API
  */
 export class Gitea {
-    gitlabUsername: string;
-    gitlabToken: string;
     http: AxiosInstance;
 
     constructor(options: GiteaOptions) {
-        this.gitlabUsername = options.gitlabUsername;
-        this.gitlabToken = options.gitlabToken;
-
         this.http = axios.create({
             baseURL: options.url + '/api/v1',
             headers: {
                 'Authorization': 'token ' + options.token
             }
         });
-    }
-
-    /**
-     * Migrate GitLab projects
-     *
-     * @param  projects    List of projects
-     * @param  owner       Gitea repository owner
-     * @param  progressBar Progress bar
-     */
-    async migrate(projects: GitLabProject[], owner: GiteaOwnerInfo, progressBar?: cliProgress.Bar) {
-        let migrations = [];
-        let errors: string[] = [];
-
-        if (progressBar) {
-            progressBar.start(projects.length, 0);
-        }
-
-        for (let project of projects) {
-            let repoName = this.repoName(project);
-
-            migrations.push(
-                this.http
-                    .post('/repos/migrate', {
-                        auth_username: this.gitlabUsername,
-                        auth_password: this.gitlabToken,
-                        clone_addr: project.httpUrl,
-                        description: project.description,
-                        mirror: true,
-                        private: project.visibility !== 'public',
-                        repo_name: repoName,
-                        uid: owner.id
-                    })
-                    .then(async () => {
-                        // // Migrate releases
-                        // let releaseErrors = await this.migrateReleases(project, owner);
-                        //
-                        // for (let error of releaseErrors.errors) {
-                        //     errors.push(error.message);
-                        // }
-                    })
-                    .catch(async (response) => {
-                        if (response.response.status !== 409) {
-                            let errorMessage = response.response.data.message || '';
-
-                            errors.push(
-                                chalk.redBright(`Failed to migrate ${owner.username}/${repoName} from ${project.httpUrl}:`) +
-                                `\n  Error ${response.response.status} ${response.response.statusText} ${errorMessage}`
-                            );
-
-                            return;
-                        }
-
-                        // if (response.response.status === 409) {
-                        //     // Migrate releases
-                        //     let releaseErrors = await this.migrateReleases(project, owner);
-                        //
-                        //     for (let error of releaseErrors.errors) {
-                        //         errors.push(error.message);
-                        //     }
-                        // }
-                    })
-                    .finally(async () => {
-                        if (progressBar) {
-                            progressBar.increment(1);
-                        }
-                    })
-            );
-        }
-
-        await Promise.all(migrations);
-
-        if (progressBar) {
-            progressBar.stop();
-            console.log();
-        }
-
-        for (let error of errors) {
-            console.error(error);
-        }
-    }
-
-    /**
-     * Migrate project releases
-     */
-    async migrateReleases(project: GitLabProject, owner: GiteaOwnerInfo): Promise<{ errors: Error[] }> {
-        try {
-            const response = await this.http.get(`/projects/${project.id}/releases`);
-
-            let releases = [];
-            let errors: Error[] = [];
-
-            console.log(response.data);
-
-            // for (let release of response.data) {
-            //     releases.push(
-            //         this.http
-            //             .post(`/repos/${owner.username}/${this.repoName(project)}/releases`, {
-            //
-            //             })
-            //             .catch(() => {
-            //                 // return response;
-            //             })
-            //     )
-            //
-            // }
-            //
-            // await Promise.all(releases);
-
-            return { errors: errors };
-        } catch (ex) {
-            return {
-                errors: [
-                    new Error('Could not fetch list of releases from GitLab instance. ' + ex.message)
-                ]
-            }
-        }
     }
 
     /**
@@ -227,16 +86,5 @@ export class Gitea {
         } catch (ex) {
             throw new Error('Could not fetch user organisations from Gitea instance. ' + ex.message);
         }
-    }
-
-    /**
-     * Convert GitLab project name to Gitea project name
-     *
-     * @param  project
-     *
-     * @return Project name
-     */
-    repoName(project: GitLabProject): string {
-        return project.fullPath.substr(project.fullPath.indexOf('/') + 1).replace('/', '-');
     }
 }

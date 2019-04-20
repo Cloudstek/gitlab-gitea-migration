@@ -1,4 +1,4 @@
-import axios, { AxiosInstance, AxiosPromise, AxiosRequestConfig, AxiosResponse } from 'axios';
+import axios, { AxiosInstance, AxiosRequestConfig, AxiosResponse } from 'axios';
 import chalk from 'chalk';
 
 export interface GitLabOptions {
@@ -6,6 +6,8 @@ export interface GitLabOptions {
     url: string;
     /** GitLab API token */
     token: string;
+    /** GitLab username */
+    username: string;
 }
 
 export interface GitLabProject {
@@ -25,11 +27,21 @@ export interface GitLabProject {
     visibility: string;
 }
 
+export interface GitLabKey {
+    id: number;
+    title: string;
+    /** Public SSH key */
+    key: string;
+    /** Read only access */
+    readOnly: boolean;
+}
+
 /**
  * GitLab API functionality
  */
 export class GitLab {
     http: AxiosInstance;
+    options: GitLabOptions;
 
     constructor(options: GitLabOptions) {
         this.http = axios.create({
@@ -39,6 +51,16 @@ export class GitLab {
             },
             responseType: 'json'
         });
+
+        this.options = options;
+    }
+
+    get username(): string {
+        return this.options.username;
+    }
+
+    get token(): string {
+        return this.options.token;
     }
 
     /**
@@ -96,7 +118,7 @@ export class GitLab {
      * @param  url
      * @param  config
      */
-    private async getPaged(url: string, config?: AxiosRequestConfig) {
+    async getPaged(url: string, config?: AxiosRequestConfig) {
         let responses: AxiosResponse<any>[] = [];
         let nextPage;
 
